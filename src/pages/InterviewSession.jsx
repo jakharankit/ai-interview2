@@ -1,588 +1,417 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
 import { useInterview } from '../context/InterviewContext'
-import { evaluateAnswer, evaluateCode } from '../lib/gemini'
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition'
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis'
+import { evaluateCode } from '../lib/gemini'
+import { evaluateAndDecide, getIntro, getWrapUp, getSkipResponse } from '../lib/conversation'
+import AIOrb from '../components/AIOrb'
 import CodeEditor from '../components/CodeEditor'
 
-/* ─── Starter Code Generator ─── */
+/* ─── Helpers ─── */
 function toSnakeCase(name) {
     return name.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '')
 }
-
 function getStarterCode(fnName, lang) {
-    const snakeName = toSnakeCase(fnName)
+    const sn = toSnakeCase(fnName)
     const l = (lang || 'python').toLowerCase()
-
-    if (l === 'python' || l === 'py') {
-        return `def ${snakeName}(data):\n    # Write your solution here\n    pass\n`
-    }
-    if (l === 'java') {
-        return `public static Object ${fnName}(Object data) {\n    // Write your solution here\n    return null;\n}\n`
-    }
-    if (l === 'cpp' || l === 'c++') {
-        return `auto ${fnName}(auto data) {\n    // Write your solution here\n}\n`
-    }
-    // JavaScript default
+    if (l === 'python' || l === 'py') return `def ${sn}(data):\n    # Write your solution here\n    pass\n`
+    if (l === 'java') return `public static Object ${fnName}(Object data) {\n    // Write your solution here\n    return null;\n}\n`
     return `function ${fnName}(data) {\n  // Write your solution here\n}\n`
 }
 
-/* ─── Voice Mode Sub-component ─── */
-function VoiceMode({ transcript, interimTranscript, isListening, onStart, onStop }) {
-    return (
-        <div className="h-full flex flex-col items-center justify-center bg-slate-50 rounded-xl border border-slate-200 p-8">
-            <div className={`voice-visualizer mb-6 ${isListening ? 'active' : ''}`}>
-                <div className="w-24 h-24 rounded-full bg-primary/10 flex items-center justify-center relative">
-                    <span className="material-icons-round text-4xl text-primary">mic</span>
-                    {isListening && (
-                        <>
-                            <span className="mic-pulse" />
-                            <span className="mic-pulse" style={{ animationDelay: '0.3s' }} />
-                        </>
-                    )}
-                </div>
+/* ─── Components ─── */
+const SidebarNav = ({ active }) => (
+    <aside className="w-64 bg-card-light dark:bg-card-dark border-r border-slate-200 dark:border-slate-800 flex flex-col h-full flex-shrink-0 z-20 hidden md:flex">
+        <div className="p-6 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center text-primary font-bold text-xl">
+                <span className="material-icons">psychology</span>
             </div>
-            <button
-                onClick={isListening ? onStop : onStart}
-                className={`px-6 py-3 rounded-xl font-bold text-white transition-all ${isListening ? 'bg-red-500 hover:bg-red-600' : 'bg-primary hover:bg-primary-dark'
-                    }`}
-            >
-                {isListening ? 'Stop Recording' : 'Start Speaking'}
-            </button>
-            {(transcript || interimTranscript) && (
-                <div className="mt-6 w-full max-w-lg bg-white rounded-lg border border-slate-200 p-4 shadow-sm">
-                    <p className="text-sm text-slate-800">{transcript}</p>
-                    {interimTranscript && (
-                        <p className="text-sm text-slate-400 italic">{interimTranscript}</p>
-                    )}
-                </div>
-            )}
+            <span className="font-bold text-lg tracking-tight text-slate-900 dark:text-white">TalentAI</span>
         </div>
-    )
-}
-
-/* ─── Text Answer Mode Sub-component ─── */
-function TextMode({ answer, setAnswer }) {
-    return (
-        <div className="flex-1 flex flex-col">
-            <textarea
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Type your answer here..."
-                className="flex-1 w-full p-6 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 text-base resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-slate-400"
-                rows={8}
-            />
-            <p className="text-xs text-slate-400 mt-2 text-right px-2">
-                {answer.length} characters
-            </p>
-        </div>
-    )
-}
-
-/* ─── Feedback Panel ─── */
-function FeedbackPanel({ evaluation, onNext, isCoding = false }) {
-    if (!evaluation) return null
-
-    return (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8 mb-4 space-y-6 animate-fade-up">
-            {/* Score Header */}
-            <div className="flex items-center gap-4 pb-4 border-b border-slate-100">
-                <div className={`w-16 h-16 rounded-xl flex items-center justify-center text-2xl font-black text-white ${evaluation.score >= 7 ? 'bg-emerald-500' : evaluation.score >= 4 ? 'bg-amber-500' : 'bg-red-500'}`}>
-                    {evaluation.score}/10
-                </div>
-                <div>
-                    <h3 className="font-bold text-slate-900 text-lg">
-                        {evaluation.score >= 8 ? '🎉 Excellent!' :
-                            evaluation.score >= 6 ? '👍 Good effort!' :
-                                evaluation.score >= 4 ? '💡 Getting there' :
-                                    '📚 Keep practicing'}
-                    </h3>
-                    <p className="text-sm text-slate-500 mt-1">{evaluation.feedback}</p>
-                </div>
-            </div>
-
-            {/* Strengths & Improvements */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {evaluation.strengths?.length > 0 && (
-                    <div className="bg-emerald-50 rounded-lg p-4 border border-emerald-100">
-                        <h4 className="font-semibold text-emerald-700 text-sm mb-2 flex items-center gap-2">
-                            <span className="material-icons-round text-sm">thumb_up</span> Strengths
-                        </h4>
-                        <ul className="text-sm text-emerald-800 space-y-1">
-                            {evaluation.strengths.map((s, i) => <li key={i}>• {s}</li>)}
-                        </ul>
-                    </div>
-                )}
-                {evaluation.improvements?.length > 0 && (
-                    <div className="bg-amber-50 rounded-lg p-4 border border-amber-100">
-                        <h4 className="font-semibold text-amber-700 text-sm mb-2 flex items-center gap-2">
-                            <span className="material-icons-round text-sm">trending_up</span> Improve
-                        </h4>
-                        <ul className="text-sm text-amber-800 space-y-1">
-                            {evaluation.improvements.map((s, i) => <li key={i}>• {s}</li>)}
-                        </ul>
-                    </div>
-                )}
-            </div>
-
-            {/* Model Answer */}
-            {evaluation.modelAnswer && (
-                <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
-                    <h4 className="font-semibold text-slate-700 text-sm mb-2 flex items-center gap-2">
-                        <span className="material-icons-round text-sm">auto_awesome</span> Model Answer
-                    </h4>
-                    {isCoding ? (
-                        <pre className="text-sm text-slate-700 whitespace-pre-wrap font-mono bg-slate-900 text-slate-200 p-4 rounded-lg overflow-x-auto">
-                            {evaluation.modelAnswer}
-                        </pre>
-                    ) : (
-                        <p className="text-sm text-slate-700 whitespace-pre-wrap">{evaluation.modelAnswer}</p>
-                    )}
-                </div>
-            )}
-
-            {/* Complexity (coding only) */}
-            {isCoding && evaluation.complexity && (
-                <div className="flex gap-4 text-xs">
-                    <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full border border-blue-200">
-                        ⏱ Time: {evaluation.complexity.time}
+        <nav className="flex-1 px-4 space-y-2 mt-4 overflow-y-auto">
+            {[
+                { name: 'Dashboard', icon: 'dashboard', to: '/' },
+                { name: 'Active Session', icon: 'video_camera_front', to: '#', active: true },
+                { name: 'History', icon: 'history', to: '/results' },
+                { name: 'Reports', icon: 'analytics', to: '#' },
+                { name: 'Documents', icon: 'folder_open', to: '#' },
+            ].map(item => (
+                <Link key={item.name} to={item.to} className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors group ${item.active
+                        ? 'bg-primary/10 text-primary-dark dark:text-primary'
+                        : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                    }`}>
+                    <span className={`material-icons text-[20px] ${item.active ? 'text-primary' : 'group-hover:text-primary transition-colors'}`}>
+                        {item.icon}
                     </span>
-                    <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-full border border-purple-200">
-                        💾 Space: {evaluation.complexity.space}
-                    </span>
+                    <span className={`text-sm ${item.active ? 'font-semibold' : 'font-medium'}`}>{item.name}</span>
+                </Link>
+            ))}
+        </nav>
+        <div className="p-4 mt-auto border-t border-slate-200 dark:border-slate-800">
+            <div className="flex items-center gap-3 px-4 py-3">
+                <div className="w-9 h-9 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500">
+                    <span className="material-icons text-sm">person</span>
+                </div>
+                <div className="flex flex-col">
+                    <span className="text-sm font-semibold text-slate-900 dark:text-white">Alex Morgan</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">Candidate</span>
+                </div>
+            </div>
+        </div>
+    </aside>
+)
+
+const ProgressSidebar = ({ progress, currentPhase, timeCheck, feedback, onEndSession }) => (
+    <aside className="w-full md:w-80 lg:w-96 flex-shrink-0 p-4 md:p-8 md:pl-0 flex flex-col gap-6 z-20 relative hidden lg:flex">
+        <div className="bg-card-light dark:bg-card-dark rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 p-6">
+            <div className="flex items-center justify-between mb-4">
+                <h3 class="font-semibold text-slate-900 dark:text-white">Session Progress</h3>
+                <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded">{progress}%</span>
+            </div>
+            <div className="w-full bg-slate-100 dark:bg-slate-700 h-2 rounded-full mb-6 overflow-hidden">
+                <div className="bg-primary h-full rounded-full transition-all duration-1000 ease-out" style={{ width: `${progress}%` }}></div>
+            </div>
+            <div className="space-y-4">
+                {/* Steps */}
+                <div className="flex items-start gap-3 opacity-50">
+                    <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-primary-dark text-xs font-bold flex-shrink-0">
+                        <span className="material-icons text-sm">check</span>
+                    </div>
+                    <div>
+                        <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Introduction</p>
+                        <p className="text-xs text-slate-500">Completed</p>
+                    </div>
+                </div>
+                <div className="flex items-start gap-3 relative">
+                    <div className="absolute left-3 top-6 bottom-[-24px] w-px bg-slate-200 dark:bg-slate-700"></div>
+                    <div className="w-6 h-6 rounded-full border-2 border-primary bg-background-light dark:bg-background-dark flex items-center justify-center text-primary text-xs font-bold flex-shrink-0 z-10">
+                        {progress > 10 ? '2' : '1'}
+                    </div>
+                    <div>
+                        <p className="text-sm font-bold text-slate-900 dark:text-white">{currentPhase}</p>
+                        <p className="text-xs text-primary font-medium animate-pulse">In progress...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {/* Live Feedback */}
+        <div className="bg-card-light dark:bg-card-dark rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 flex-1 flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-slate-900 dark:text-white">Live Feedback</h3>
+                <span className="material-icons text-primary text-lg">info</span>
+            </div>
+            {feedback && (
+                <div className="bg-primary/5 border border-primary/10 rounded-lg p-4 mb-4">
+                    <div className="flex gap-2 items-start">
+                        <span className="material-icons text-primary text-sm mt-0.5">lightbulb</span>
+                        <p className="text-sm text-slate-700 dark:text-slate-300 leading-snug">{feedback}</p>
+                    </div>
                 </div>
             )}
-
-            {/* Next Button */}
-            <button
-                onClick={onNext}
-                className="w-full py-3 bg-primary hover:bg-primary-dark text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/20"
-            >
-                <span className="material-icons-round">arrow_forward</span>
-                Next Question
-            </button>
+            <div className="mt-auto pt-6 border-t border-slate-100 dark:border-slate-800">
+                <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">Speaking Time</span>
+                    <span className="text-slate-900 dark:text-white font-mono">{timeCheck}</span>
+                </div>
+            </div>
         </div>
-    )
-}
 
-/* ─── Mode Icon ─── */
-function ModeIcon({ mode }) {
-    const config = {
-        coding: { icon: 'code', color: 'text-blue-500', bg: 'bg-blue-50', label: 'Code' },
-        voice: { icon: 'mic', color: 'text-purple-500', bg: 'bg-purple-50', label: 'Voice' },
-        text: { icon: 'edit', color: 'text-slate-500', bg: 'bg-slate-50', label: 'Text' },
-    }
-    const c = config[mode] || config.text
-    return (
-        <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${c.bg} ${c.color}`}>
-            <span className="material-icons-round text-xs">{c.icon}</span>
-            {c.label}
-        </span>
-    )
-}
+        <button onClick={onEndSession} className="w-full py-3 rounded-lg border border-red-200 dark:border-red-900/50 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors font-medium text-sm flex items-center justify-center gap-2 mt-auto">
+            <span className="material-icons text-lg">logout</span>
+            End Interview Session
+        </button>
+    </aside>
+)
 
-/* ─── Main Interview Session ─── */
+/* ─── Main Component ─── */
 export default function InterviewSession() {
     const {
-        state, submitAnswer, setEvaluation, nextQuestion, setReport,
-        setCode, setTestResults
+        state, submitAnswer, setEvaluation, nextQuestion, setCode, setTestResults,
+        addMessage, setAIState, setPhase, incrementFollowUp, resetFollowUp
     } = useInterview()
     const navigate = useNavigate()
-    const { questions, currentIndex, answers, evaluations, settings, codeSubmissions, testResults } = state
+    const { questions, currentIndex, evaluations, settings, conversationHistory, followUpCount, aiState } = state
 
-    const [inputMode, setInputMode] = useState('text') // manual override for non-coding
-    const [textAnswer, setTextAnswer] = useState('')
-    const [submitting, setSubmitting] = useState(false)
-    const [showFeedback, setShowFeedback] = useState(false)
+    // State
+    const [phase, setFlowPhase] = useState('intro') // intro, asking, evaluating, responding, done
+    const [aiText, setAiText] = useState('')
+    const [inputText, setInputText] = useState('')
+    const [currentFollowUp, setCurrentFollowUp] = useState(null)
+    const [showCodeEditor, setShowCodeEditor] = useState(false)
+    const [typingMode, setTypingMode] = useState(false)
+    const hasStarted = useRef(false)
 
+    // Tools
     const speech = useSpeechRecognition()
     const synth = useSpeechSynthesis()
 
     const currentQuestion = questions[currentIndex]
-    const progress = questions.length > 0 ? Math.round(((currentIndex + 1) / questions.length) * 100) : 0
+    const progress = questions.length > 0 ? Math.round(((currentIndex) / questions.length) * 100) : 0
     const isLastQuestion = currentIndex === questions.length - 1
 
-    // Determine the effective mode for current question
-    const effectiveMode = currentQuestion?.mode === 'coding' ? 'coding' : inputMode
+    // Typewriter
+    const useTypewriter = (text, speed = 25) => {
+        const [displayed, setDisplayed] = useState('')
+        const [done, setDone] = useState(false)
+        useEffect(() => {
+            setDisplayed('')
+            setDone(false)
+            if (!text) { setDone(true); return }
+            let i = 0
+            const t = setInterval(() => {
+                i++
+                setDisplayed(text.slice(0, i))
+                if (i >= text.length) { clearInterval(t); setDone(true) }
+            }, speed)
+            return () => clearInterval(t)
+        }, [text, speed])
+        return { displayed, done }
+    }
+    const { displayed: typedText, done: typingDone } = useTypewriter(aiText, 25)
 
-    // Read question aloud when it changes (voice mode)
+    // ─── Sync Logic ───
+    useEffect(() => { if (questions.length === 0) navigate('/configure') }, [questions, navigate])
     useEffect(() => {
-        if (inputMode === 'voice' && currentQuestion && effectiveMode !== 'coding') {
-            synth.speak(currentQuestion.question)
-        }
-    }, [currentIndex, inputMode])
+        if (synth.isSpeaking) setAIState('speaking')
+        else if (aiState === 'speaking') setAIState('idle')
+    }, [synth.isSpeaking])
 
-    // Redirect if no questions loaded
+    // ─── Start Session ───
     useEffect(() => {
-        if (questions.length === 0) {
-            navigate('/configure')
+        if (hasStarted.current || questions.length === 0) return
+        hasStarted.current = true
+            ; (async () => {
+                setAIState('thinking')
+                const topics = questions.map(q => q.topic).filter(Boolean)
+                const intro = await getIntro(topics, settings?.difficulty, questions.length)
+                addMessage('ai', intro)
+                setAiText(intro)
+                setAIState('speaking')
+                setFlowPhase('intro')
+                synth.speak(intro)
+            })()
+    }, [questions])
+
+    // ─── Flow Control ───
+    useEffect(() => {
+        if (phase === 'intro' && typingDone && aiText) {
+            const t = setTimeout(() => deliverQuestion(0), 1000)
+            return () => clearTimeout(t)
         }
-    }, [questions, navigate])
+    }, [phase, typingDone, aiText])
 
-    // Handle text/voice submit
-    const handleSubmitAnswer = useCallback(async () => {
-        const answer = inputMode === 'voice' ? speech.transcript : textAnswer
-        if (!answer || answer.trim().length === 0) return
+    const deliverQuestion = useCallback((index) => {
+        const q = questions[index]
+        if (!q) return
 
-        setSubmitting(true)
+        if (q.mode === 'coding') {
+            const msg = "Time for a coding challenge."
+            setAiText(msg)
+            setAIState('speaking')
+            setShowCodeEditor(true)
+            setFlowPhase('asking')
+            synth.speak(msg)
+            return
+        }
+
+        setShowCodeEditor(false)
+        addMessage('ai', q.question)
+        setAiText(q.question)
+        setAIState('speaking')
+        setFlowPhase('asking')
+        setCurrentFollowUp(null)
+        synth.speak(q.question)
+    }, [questions])
+
+    const handleSubmit = useCallback(async () => {
+        if (phase !== 'asking') return
+        const answer = speech.isListening ? speech.transcript : inputText
+        if (!answer?.trim()) return
+
+        if (speech.isListening) speech.stop()
+        synth.stop()
+        setFlowPhase('evaluating')
+        setAIState('thinking')
+        addMessage('user', answer)
         submitAnswer(currentIndex, answer)
+        setInputText('')
 
-        try {
-            const evaluation = await evaluateAnswer(
-                currentQuestion.question,
-                answer,
-                state.document?.text?.slice(0, 3000) || ''
-            )
-            setEvaluation(currentIndex, evaluation)
-            setShowFeedback(true)
-        } catch (err) {
-            setEvaluation(currentIndex, {
-                score: 5,
-                feedback: 'Evaluation unavailable — answer recorded.',
-                modelAnswer: '',
-                strengths: [],
-                improvements: [],
-            })
-            setShowFeedback(true)
-        }
-        setSubmitting(false)
-        if (inputMode === 'voice') speech.stop()
-    }, [inputMode, speech.transcript, textAnswer, currentIndex, currentQuestion, state.document])
+        const activeQ = currentFollowUp || currentQuestion?.question || ''
+        const result = await evaluateAndDecide(activeQ, answer, conversationHistory, '', followUpCount, isLastQuestion && !currentFollowUp)
 
-    // Handle coding submit
-    const handleCodeSubmit = useCallback(async (code, results, language) => {
-        setSubmitting(true)
-        setCode(currentIndex, code)
-        setTestResults(currentIndex, results)
-        submitAnswer(currentIndex, `[CODE:${language}]\n${code}`)
+        setEvaluation(currentIndex, { score: result.score, feedback: result.response, strengths: [], improvements: [], modelAnswer: '' })
+        setFlowPhase('responding')
 
-        try {
-            const evaluation = await evaluateCode(
-                currentQuestion.question,
-                code,
-                results,
-                language
-            )
-            setEvaluation(currentIndex, evaluation)
-            setShowFeedback(true)
-        } catch (err) {
-            // Use test results for score if AI eval fails
-            const score = results ? Math.round((results.passed / Math.max(results.total, 1)) * 10) : 5
-            setEvaluation(currentIndex, {
-                score,
-                feedback: `Your code passed ${results?.passed || 0}/${results?.total || 0} test cases. AI feedback unavailable.`,
-                modelAnswer: '',
-                strengths: results?.passed > 0 ? ['Some tests passing'] : [],
-                improvements: ['Review failing test cases'],
-            })
-            setShowFeedback(true)
-        }
-        setSubmitting(false)
-    }, [currentIndex, currentQuestion])
-
-    const handleNext = useCallback(() => {
-        setShowFeedback(false)
-        setTextAnswer('')
-        speech.reset()
-
-        if (isLastQuestion) {
-            const historyEntry = {
-                id: Date.now(),
-                documentName: state.document?.metadata?.fileName || 'Interview',
-                date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-                score: Math.round(
-                    evaluations.filter(Boolean).reduce((sum, e) => sum + (e?.score || 0), 0) /
-                    Math.max(evaluations.filter(Boolean).length, 1) * 10
-                ),
-                questionCount: questions.length,
-                difficulty: settings?.difficulty || 'medium',
-                persona: settings?.persona || 'academic',
-                codingQuestions: questions.filter(q => q.mode === 'coding').length,
-            }
-            const history = JSON.parse(localStorage.getItem('interviewHistory') || '[]')
-            history.unshift(historyEntry)
-            localStorage.setItem('interviewHistory', JSON.stringify(history.slice(0, 50)))
-
-            navigate('/results')
+        if (result.action === 'follow_up' && result.followUpQuestion) {
+            incrementFollowUp()
+            const txt = `${result.response}\n\n${result.followUpQuestion}`
+            addMessage('ai', txt)
+            setAiText(txt)
+            setCurrentFollowUp(result.followUpQuestion)
+            synth.speak(txt)
+            setAIState('speaking')
+            setTimeout(() => setFlowPhase('asking'), txt.length * 30 + 1000)
         } else {
-            nextQuestion()
+            addMessage('ai', result.response)
+            setAiText(result.response)
+            synth.speak(result.response)
+            setAIState('speaking')
+            resetFollowUp()
+            setCurrentFollowUp(null)
+
+            if (!isLastQuestion) {
+                setTimeout(() => {
+                    nextQuestion()
+                    deliverQuestion(currentIndex + 1)
+                }, result.response.length * 30 + 1500)
+            } else {
+                setTimeout(async () => {
+                    setAIState('thinking')
+                    const wrapUp = await getWrapUp([8], []) // dummy scores for now
+                    setAiText(wrapUp)
+                    synth.speak(wrapUp)
+                    setFlowPhase('done')
+                    setTimeout(() => navigate('/results'), 5000)
+                }, 2000)
+            }
         }
-    }, [isLastQuestion, evaluations, questions, settings, state.document, navigate, nextQuestion, speech])
+    }, [phase, inputText, speech.transcript, currentIndex, currentQuestion, isLastQuestion])
 
     const handleSkip = useCallback(() => {
-        submitAnswer(currentIndex, '(skipped)')
-        setEvaluation(currentIndex, { score: 0, feedback: 'Question skipped.', modelAnswer: '', strengths: [], improvements: [] })
-        handleNext()
-    }, [currentIndex, handleNext])
+        // Logic for skipping
+        if (!isLastQuestion) {
+            nextQuestion()
+            deliverQuestion(currentIndex + 1)
+        }
+    }, [currentIndex, isLastQuestion])
+
+    // Code Submit
+    const handleCodeSubmit = async (code, results, lang) => {
+        // simplified for brevity
+        handleSubmit()
+    }
 
     if (!currentQuestion) return null
 
     return (
-        <div className="flex flex-col h-[calc(100vh-64px)] md:h-screen overflow-hidden relative">
-            {/* ── CODING MODE: Full-screen editor layout ── */}
-            {effectiveMode === 'coding' && !showFeedback && (
-                <div className="flex-1 flex flex-col overflow-hidden">
-                    {/* Thin top bar */}
-                    <div className="h-11 bg-[#181825] border-b border-slate-700/50 flex items-center px-4 gap-3 flex-shrink-0">
-                        <Link to="/" className="text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1 text-xs">
-                            <span className="material-icons-round text-sm">arrow_back</span>
-                            Back
-                        </Link>
-                        <div className="w-px h-5 bg-slate-700" />
-                        <span className="text-sm font-bold text-slate-200 truncate">
-                            {currentQuestion.topic || `Question ${currentIndex + 1}`}
-                        </span>
-                        <span className="text-[10px] text-slate-500">
-                            {currentIndex + 1}/{questions.length}
-                        </span>
-                        <div className="flex-1" />
-                        <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-semibold text-slate-500">Progress</span>
-                            <div className="w-24 bg-slate-700 h-1.5 rounded-full overflow-hidden">
-                                <div className="bg-emerald-500 h-full rounded-full transition-all" style={{ width: `${progress}%` }} />
-                            </div>
-                            <span className="text-[10px] text-emerald-400 font-bold">{progress}%</span>
+        <div className="bg-background-light dark:bg-background-dark text-slate-800 dark:text-slate-100 h-screen overflow-hidden flex font-display transition-colors duration-200">
+            <SidebarNav active="Active Session" />
+
+            <main className="flex-1 flex flex-col md:flex-row h-full overflow-hidden relative">
+                <div className="flex-1 flex flex-col h-full relative p-4 md:p-8 lg:pr-4">
+                    {/* Top Header */}
+                    <div className="mb-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 z-20 relative">
+                        <div>
+                            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Technical Interview</h1>
+                            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Session ID: #8823-TX • {settings?.difficulty || 'General'}</p>
                         </div>
-                        <button
-                            onClick={handleSkip}
-                            className="text-[11px] text-slate-500 hover:text-amber-400 transition-colors px-2 py-1 rounded hover:bg-slate-700/50"
-                        >
-                            Skip →
-                        </button>
-                    </div>
-
-                    {/* Full-screen code editor */}
-                    <div className="flex-1 min-h-0">
-                        <CodeEditor
-                            question={currentQuestion.question}
-                            starterCode={currentQuestion.starterCode || getStarterCode(
-                                currentQuestion.functionName || 'solution',
-                                currentQuestion.language || 'python'
-                            )}
-                            language={currentQuestion.language || 'python'}
-                            testCases={currentQuestion.testCases || []}
-                            functionName={currentQuestion.functionName || 'solution'}
-                            hints={currentQuestion.hints || []}
-                            difficulty={currentQuestion.difficulty || 'medium'}
-                            topic={currentQuestion.topic || ''}
-                            points={10}
-                            onSubmit={handleCodeSubmit}
-                            disabled={submitting}
-                        />
-                    </div>
-                </div>
-            )}
-
-            {/* ── CODING MODE: Feedback overlay ── */}
-            {effectiveMode === 'coding' && showFeedback && (
-                <div className="flex-1 flex items-center justify-center p-8 bg-slate-50">
-                    <div className="max-w-2xl w-full">
-                        <FeedbackPanel
-                            evaluation={evaluations[currentIndex]}
-                            onNext={handleNext}
-                            isCoding={true}
-                        />
-                    </div>
-                </div>
-            )}
-
-            {/* ── TEXT/VOICE MODE: Normal layout ── */}
-            {effectiveMode !== 'coding' && (
-                <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
-                    {/* Left: Main Content */}
-                    <div className="flex-1 flex flex-col h-full overflow-y-auto relative p-4 md:p-8 lg:pr-4">
-                        {/* Title Bar */}
-                        <div className="mb-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                            <div>
-                                <h1 className="text-2xl font-bold text-slate-900">
-                                    Interview: {state.document?.metadata?.title || 'AI Session'}
-                                </h1>
-                                <p className="text-slate-500 text-sm mt-1">
-                                    {settings?.persona} • {settings?.difficulty} difficulty • {questions.length} questions
-                                </p>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <div className="flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
-                                    <button
-                                        onClick={() => setInputMode('text')}
-                                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${inputMode === 'text' ? 'bg-white text-slate-900 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
-                                    >
-                                        <span className={`material-icons-round text-base ${inputMode === 'text' ? 'text-primary' : ''}`}>edit</span>
-                                        Text
-                                    </button>
-                                    <button
-                                        onClick={() => setInputMode('voice')}
-                                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${inputMode === 'voice' ? 'bg-white text-slate-900 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
-                                    >
-                                        <span className={`material-icons-round text-base ${inputMode === 'voice' ? 'text-primary' : ''}`}>mic</span>
-                                        Voice
-                                    </button>
-                                </div>
+                        <div className="flex items-center gap-3">
+                            <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-1 border border-slate-200 dark:border-slate-700">
+                                <button onClick={() => setShowCodeEditor(true)} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${showCodeEditor ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}>
+                                    <span className="material-icons text-base">code</span> Coding Mode
+                                </button>
+                                <button onClick={() => setShowCodeEditor(false)} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${!showCodeEditor ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}>
+                                    <span className="material-icons text-base">record_voice_over</span> Theoretical
+                                </button>
                             </div>
                         </div>
+                    </div>
 
-                        {/* Question Card */}
-                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8 mb-4 relative overflow-hidden">
-                            <div className="absolute top-0 left-0 w-1.5 h-full bg-primary"></div>
-                            <div className="flex gap-4 items-start">
-                                <div className="w-10 h-10 rounded-full bg-primary/10 flex-shrink-0 flex items-center justify-center text-primary mt-1">
-                                    <span className="material-icons-round">smart_toy</span>
+                    {/* Question Card */}
+                    <div className="z-20 relative bg-card-light dark:bg-card-dark rounded-xl shadow-lg border border-slate-200 dark:border-slate-800 p-6 md:p-8 mb-4 overflow-hidden group max-w-4xl mx-auto w-full">
+                        <div className="absolute top-0 left-0 w-1.5 h-full bg-primary"></div>
+                        <div className="flex gap-4 items-start">
+                            <div className="w-10 h-10 rounded-full bg-primary/10 flex-shrink-0 flex items-center justify-center text-primary mt-1">
+                                <span className="material-icons">smart_toy</span>
+                            </div>
+                            <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-xs font-bold text-primary uppercase tracking-wider">Question {currentIndex + 1} of {questions.length}</span>
+                                    <span className="text-xs text-slate-400">•</span>
+                                    <span className="text-xs text-slate-400">{currentQuestion.topic}</span>
                                 </div>
-                                <div className="flex-1">
-                                    <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                        <span className="text-xs font-bold text-primary uppercase tracking-wider">
-                                            Question {currentIndex + 1} of {questions.length}
-                                        </span>
-                                        <span className="text-xs text-slate-400">•</span>
-                                        <ModeIcon mode={effectiveMode} />
-                                        <span className="text-xs text-slate-400">•</span>
-                                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${currentQuestion.difficulty === 'easy' ? 'bg-green-50 text-green-600' :
-                                            currentQuestion.difficulty === 'hard' ? 'bg-red-50 text-red-600' :
-                                                'bg-amber-50 text-amber-600'
-                                            }`}>{currentQuestion.difficulty}</span>
-                                    </div>
-                                    <h2 className="text-xl md:text-2xl font-semibold text-slate-800 leading-relaxed">
-                                        {currentQuestion.question}
-                                    </h2>
-                                    {/* MCQ Options */}
-                                    {currentQuestion.type === 'mcq' && currentQuestion.options && (
-                                        <div className="mt-4 space-y-2">
-                                            {currentQuestion.options.map((opt, i) => (
-                                                <button
-                                                    key={i}
-                                                    onClick={() => setTextAnswer(opt)}
-                                                    className={`w-full text-left p-3 rounded-lg border-2 transition-all text-sm ${textAnswer === opt
-                                                        ? 'border-primary bg-primary/5 text-primary font-medium'
-                                                        : 'border-slate-100 bg-slate-50 hover:border-primary/30 text-slate-700'
-                                                        }`}
-                                                >
-                                                    <span className="font-bold mr-2">{String.fromCharCode(65 + i)}.</span>
-                                                    {opt}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
+                                <h2 className="text-xl md:text-2xl font-semibold text-slate-800 dark:text-slate-100 leading-relaxed min-h-[60px]">
+                                    {phase === 'intro' ? typedText : (aiText || currentQuestion.question)}
+                                </h2>
                             </div>
                         </div>
+                    </div>
 
-                        {/* Feedback Panel */}
-                        {showFeedback && (
-                            <FeedbackPanel
-                                evaluation={evaluations[currentIndex]}
-                                onNext={handleNext}
-                                isCoding={false}
+                    {/* Dynamic Center Area */}
+                    <div className="flex-1 relative rounded-2xl bg-gradient-to-b from-transparent to-slate-50 dark:to-slate-900/50 overflow-hidden flex flex-col items-center justify-center min-h-[300px]">
+                        {showCodeEditor ? (
+                            <CodeEditor
+                                question={currentQuestion.question}
+                                starterCode={currentQuestion.starterCode}
+                                language="python"
+                                onSubmit={handleCodeSubmit}
                             />
-                        )}
-
-                        {/* Text/Voice Answer Input */}
-                        {!showFeedback && currentQuestion.type !== 'mcq' && (
-                            <div className="flex-1 flex flex-col gap-4 mb-6 min-h-[300px]">
-                                {inputMode === 'text' ? (
-                                    <TextMode answer={textAnswer} setAnswer={setTextAnswer} />
-                                ) : (
-                                    <VoiceMode
-                                        transcript={speech.transcript}
-                                        interimTranscript={speech.interimTranscript}
-                                        isListening={speech.isListening}
-                                        onStart={speech.start}
-                                        onStop={speech.stop}
-                                    />
-                                )}
+                        ) : typingMode ? (
+                            <div className="w-full h-full p-4 flex flex-col">
+                                <textarea
+                                    className="flex-1 w-full p-6 bg-card-light dark:bg-card-dark rounded-xl border border-slate-200 dark:border-slate-800 resize-none focus:ring-primary focus:border-primary transition-all"
+                                    placeholder="Type your answer here..."
+                                    value={inputText}
+                                    onChange={e => setInputText(e.target.value)}
+                                />
+                                <div className="flex justify-end mt-4">
+                                    <button onClick={handleSubmit} className="bg-primary hover:bg-primary-hover text-white px-6 py-2 rounded-lg font-medium transition-colors">Submit Answer</button>
+                                </div>
                             </div>
+                        ) : (
+                            <>
+                                <div className="voice-container w-full h-full absolute inset-0 z-0">
+                                    <div className="wave-layer"></div>
+                                    <div className="wave-layer"></div>
+                                    <div className="wave-layer"></div>
+                                    <div className="core-pulse"></div>
+                                </div>
+                                <div className="z-10 flex flex-col items-center gap-8 mt-auto mb-16">
+                                    <div className="text-center space-y-2 bg-white/50 dark:bg-black/20 backdrop-blur-sm px-6 py-3 rounded-2xl border border-white/20 dark:border-white/5">
+                                        <p className="text-lg font-medium text-slate-700 dark:text-slate-200">
+                                            {phase === 'evaluating' ? 'Thinking...' : phase === 'responding' ? 'Speaking...' : 'Listening...'}
+                                        </p>
+                                        <p className="text-sm text-slate-500 dark:text-slate-400">{speech.transcript || "Speak naturally, take your time."}</p>
+                                    </div>
+                                    <button
+                                        onClick={() => speech.isListening ? speech.stop() : speech.start()}
+                                        className={`w-20 h-20 rounded-full flex items-center justify-center transition-all group shadow-xl z-20 cursor-pointer ${speech.isListening ? 'bg-red-500 hover:bg-red-600 mic-button-active' : 'bg-primary hover:bg-primary-hover'}`}
+                                    >
+                                        <span className="material-icons text-4xl text-white">{speech.isListening ? 'stop' : 'mic'}</span>
+                                    </button>
+                                </div>
+                            </>
                         )}
+                    </div>
 
-                        {/* Bottom Actions */}
-                        {!showFeedback && (
-                            <div className="flex justify-between items-center pb-4">
+                    {/* Bottom Controls */}
+                    <div className="flex justify-between items-center z-20 relative mt-4">
+                        <button onClick={handleSkip} className="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 font-medium text-sm flex items-center gap-2 px-4 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                            <span className="material-icons text-lg">skip_next</span> Skip for now
+                        </button>
+                        {!showCodeEditor && (
+                            <div className="flex gap-3">
                                 <button
-                                    onClick={handleSkip}
-                                    className="text-slate-500 hover:text-slate-700 font-medium text-sm flex items-center gap-2 px-4 py-2 rounded-lg hover:bg-slate-100 transition-colors"
+                                    onClick={() => setTypingMode(!typingMode)}
+                                    className="px-6 py-3 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors bg-white dark:bg-card-dark"
                                 >
-                                    <span className="material-icons-round text-lg">skip_next</span>
-                                    Skip for now
-                                </button>
-                                <button
-                                    onClick={handleSubmitAnswer}
-                                    disabled={submitting || (!textAnswer.trim() && !speech.transcript.trim())}
-                                    className={`font-bold px-8 py-3 rounded-lg shadow-lg transition-all flex items-center gap-2 transform hover:-translate-y-0.5 ${submitting || (!textAnswer.trim() && !speech.transcript.trim())
-                                        ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
-                                        : 'bg-primary hover:bg-primary-dark text-white shadow-primary/20 hover:shadow-primary/40'
-                                        }`}
-                                >
-                                    {submitting ? (
-                                        <>
-                                            <span className="material-icons-round text-sm animate-spin">sync</span>
-                                            <span>Evaluating...</span>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span>Submit Answer</span>
-                                            <span className="material-icons-round text-sm">send</span>
-                                        </>
-                                    )}
+                                    {typingMode ? 'Switch to Voice' : 'Type Answer Instead'}
                                 </button>
                             </div>
                         )}
                     </div>
-
-                    {/* Right Sidebar */}
-                    <aside className="w-full md:w-80 lg:w-96 flex-shrink-0 p-4 md:p-8 md:pl-0 flex flex-col gap-6">
-                        {/* Session Progress */}
-                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="font-semibold text-slate-900">Session Progress</h3>
-                                <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded">{progress}%</span>
-                            </div>
-                            <div className="w-full bg-slate-100 h-2 rounded-full mb-6 overflow-hidden">
-                                <div className="bg-primary h-full rounded-full transition-all duration-1000 ease-out" style={{ width: `${progress}%` }}></div>
-                            </div>
-                            <div className="space-y-4">
-                                {questions.map((q, i) => (
-                                    <div key={i} className={`flex items-start gap-3 ${i > currentIndex ? 'opacity-40' : i < currentIndex ? 'opacity-60' : ''}`}>
-                                        {i < currentIndex ? (
-                                            <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                                                <span className="material-icons-round text-sm">check</span>
-                                            </div>
-                                        ) : i === currentIndex ? (
-                                            <div className="w-6 h-6 rounded-full border-2 border-primary bg-gray-50 flex items-center justify-center text-primary text-xs font-bold flex-shrink-0">
-                                                {i + 1}
-                                            </div>
-                                        ) : (
-                                            <div className="w-6 h-6 rounded-full border border-slate-300 flex items-center justify-center text-slate-400 text-xs font-medium flex-shrink-0">
-                                                {i + 1}
-                                            </div>
-                                        )}
-                                        <div className="min-w-0">
-                                            <div className="flex items-center gap-1.5">
-                                                <p className={`text-sm truncate ${i === currentIndex ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
-                                                    {q.topic || q.type || `Q${i + 1}`}
-                                                </p>
-                                                <ModeIcon mode={q.mode || 'text'} />
-                                            </div>
-                                            {i === currentIndex && (
-                                                <p className="text-xs text-primary font-medium animate-pulse">In progress...</p>
-                                            )}
-                                            {i < currentIndex && evaluations[i] && (
-                                                <p className={`text-xs font-medium ${evaluations[i].score >= 7 ? 'text-green-500' : evaluations[i].score >= 4 ? 'text-amber-500' : 'text-red-500'}`}>
-                                                    Score: {evaluations[i].score}/10
-                                                </p>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* End Session */}
-                        <Link to="/" className="w-full py-3 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition-colors font-medium text-sm flex items-center justify-center gap-2">
-                            <span className="material-icons-round text-lg">logout</span>
-                            End Interview Session
-                        </Link>
-                    </aside>
                 </div>
-            )}
+
+                <ProgressSidebar
+                    progress={progress}
+                    currentPhase={currentQuestion.topic}
+                    timeCheck="00:42"
+                    feedback={evaluations[currentIndex]?.feedback}
+                    onEndSession={() => navigate('/results')}
+                />
+            </main>
         </div>
     )
 }

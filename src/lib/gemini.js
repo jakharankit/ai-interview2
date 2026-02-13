@@ -7,6 +7,11 @@ import {
     buildModeDetectionPrompt,
     buildCodingQuestionsPrompt,
     buildCodeEvalPrompt,
+    buildConversationalEvalPrompt,
+    buildFollowUpPrompt,
+    buildTransitionPrompt,
+    buildIntroPrompt,
+    buildWrapUpPrompt,
     humanizeResponse,
 } from "../utils/prompts";
 
@@ -138,4 +143,31 @@ export async function generateCodingQuestions(content, config) {
 export async function evaluateCode(question, code, testResults, language) {
     const { system, user } = buildCodeEvalPrompt(question, code, testResults, language);
     return callModel(system, user, CODE_MODELS);
+}
+
+// ─── Conversational Interview Functions ──────────────────────────────────────
+
+export async function respondToAnswer(question, answer, history, context) {
+    const { system, user } = buildConversationalEvalPrompt(question, answer, history, context);
+    return callModel(system, user);
+}
+
+export async function generateFollowUp(question, answer, previousFollowUps) {
+    const { system, user } = buildFollowUpPrompt(question, answer, previousFollowUps);
+    return callModel(system, user);
+}
+
+export async function generateTransition(fromPhase, toPhase, performance) {
+    const { system, user } = buildTransitionPrompt(fromPhase, toPhase, performance);
+    return callModel(system, user);
+}
+
+export async function generateIntro(topics, difficulty, questionCount) {
+    const { system, user } = buildIntroPrompt(topics, difficulty, questionCount);
+    return callModel(system, user);
+}
+
+export async function generateWrapUp(scores, topics) {
+    const { system, user } = buildWrapUpPrompt(scores, topics);
+    return callModel(system, user);
 }

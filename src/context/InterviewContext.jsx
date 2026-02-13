@@ -28,6 +28,12 @@ const initialState = {
     codeSubmissions: [], // user's code per question
     testResults: [], // pass/fail results per question
 
+    // Conversation state (adaptive interview)
+    conversationHistory: [], // [{ role: 'ai'|'user', text, timestamp }]
+    followUpCount: 0, // resets per base question, max 2
+    currentPhase: 'intro', // 'intro' | 'technical' | 'behavioral' | 'coding' | 'wrapup'
+    aiState: 'idle', // 'idle' | 'thinking' | 'speaking' | 'listening'
+
     // Report
     report: null,
 
@@ -110,6 +116,27 @@ function interviewReducer(state, action) {
         case "SET_ERROR":
             return { ...state, error: action.payload, status: "error", loading: false };
 
+        case "ADD_MESSAGE":
+            return {
+                ...state,
+                conversationHistory: [
+                    ...state.conversationHistory,
+                    { ...action.payload, timestamp: Date.now() },
+                ],
+            };
+
+        case "SET_AI_STATE":
+            return { ...state, aiState: action.payload };
+
+        case "SET_PHASE":
+            return { ...state, currentPhase: action.payload };
+
+        case "INCREMENT_FOLLOWUP":
+            return { ...state, followUpCount: state.followUpCount + 1 };
+
+        case "RESET_FOLLOWUP":
+            return { ...state, followUpCount: 0 };
+
         case "RESET":
             return { ...initialState };
 
@@ -146,6 +173,14 @@ export function InterviewProvider({ children }) {
             dispatch({ type: "SET_TEST_RESULTS", payload: { index, results } }),
         setModeFlags: (flags) =>
             dispatch({ type: "SET_MODE_FLAGS", payload: flags }),
+        addMessage: (role, text) =>
+            dispatch({ type: "ADD_MESSAGE", payload: { role, text } }),
+        setAIState: (state) =>
+            dispatch({ type: "SET_AI_STATE", payload: state }),
+        setPhase: (phase) =>
+            dispatch({ type: "SET_PHASE", payload: phase }),
+        incrementFollowUp: () => dispatch({ type: "INCREMENT_FOLLOWUP" }),
+        resetFollowUp: () => dispatch({ type: "RESET_FOLLOWUP" }),
     };
 
     return (

@@ -338,3 +338,124 @@ Return JSON:
 ONLY return the JSON.`,
     };
 }
+
+// ─── Conversational Interview Prompts ────────────────────────────────────────
+
+export function buildConversationalEvalPrompt(question, answer, history, context) {
+    const historyStr = (history || [])
+        .slice(-6)
+        .map(m => `${m.role === 'ai' ? 'Interviewer' : 'Candidate'}: ${m.text}`)
+        .join('\n');
+
+    return {
+        system: `You are a warm, professional interviewer having a natural conversation with a candidate. You evaluate their answers and decide what to do next.
+
+CRITICAL RULES:
+- Talk like a REAL interviewer — warm, natural, specific
+- Your "response" is what you'll SAY to the candidate (spoken aloud)
+- Keep responses SHORT (2-3 sentences max) — this is a conversation, not a lecture
+- Be encouraging even on weak answers
+- NEVER say "score" or "points" — the candidate shouldn't know they're being scored
+
+Respond with ONLY valid JSON.`,
+        user: `Current question: "${question}"
+Candidate's answer: "${answer}"
+${historyStr ? `\nConversation so far:\n${historyStr}` : ''}
+${context ? `\nTopic context: "${context.slice(0, 2000)}"` : ''}
+
+Return JSON with these exact keys:
+"score": 0-10 (your internal assessment, candidate won't see this)
+"response": Your spoken response (2-3 sentences, natural and warm)
+  GOOD: "That's a solid take! You nailed the key concept there. The way you connected it to real-world usage shows good understanding."
+  BAD: "Your answer demonstrates proficiency in the subject matter. The explanation was adequate."
+"action": one of "follow_up" | "next_question" | "wrap_up"
+  - "follow_up" if score < 6 (you want to probe deeper)
+  - "next_question" if score >= 6 (good enough, move on)
+  - "wrap_up" only if this is the last question
+"followUpQuestion": (only if action is "follow_up") A probing question that helps the candidate demonstrate their understanding better. Make it specific to what they missed.
+  GOOD: "Interesting — can you walk me through what would happen if the input list was empty?"
+  BAD: "Can you elaborate on your answer?"
+"strengths": 1-2 brief items
+"improvements": 1-2 brief items
+"keywordsFound": terms they mentioned
+"keywordsMissed": key terms they should have mentioned
+
+ONLY return the JSON.`,
+    };
+}
+
+export function buildFollowUpPrompt(originalQuestion, userAnswer, previousFollowUps) {
+    const prevStr = previousFollowUps.map((f, i) => `Follow-up ${i + 1}: ${f}`).join('\n');
+    return {
+        system: `You are a friendly interviewer asking a follow-up question. Be natural and conversational. Keep it SHORT.
+Respond with ONLY valid JSON.`,
+        user: `Original question: "${originalQuestion}"
+Candidate said: "${userAnswer}"
+${prevStr ? `Previous follow-ups already asked:\n${prevStr}` : ''}
+
+Generate a NEW follow-up question that probes a DIFFERENT angle than previous follow-ups.
+Make it specific and helpful — guide them toward demonstrating their knowledge.
+
+Return JSON:
+"question": the follow-up question (1-2 sentences)
+"hint": a subtle nudge without giving away the answer
+
+ONLY return the JSON.`,
+    };
+}
+
+export function buildTransitionPrompt(fromPhase, toPhase, performance) {
+    return {
+        system: `You are a friendly interviewer transitioning between sections. Be natural and brief. One sentence.
+Respond with ONLY a JSON object.`,
+        user: `Transition from "${fromPhase}" questions to "${toPhase}" questions.
+Candidate performance so far: ${performance || 'decent'}
+
+Return JSON:
+"transition": A natural transition sentence the interviewer would say.
+  GOOD examples:
+  - "Great technical answers! Now let's switch gears — I'd love to hear about your experiences."
+  - "Awesome coding work! Let me ask you a few scenario-based questions next."
+  - "Nice! Let's wrap up the theory and jump into some hands-on coding."
+
+ONLY return the JSON.`,
+    };
+}
+
+export function buildIntroPrompt(topics, difficulty, questionCount) {
+    return {
+        system: `You are a friendly AI interviewer starting a practice session. Be warm, brief, and encouraging. One short paragraph.
+Respond with ONLY a JSON object.`,
+        user: `Start an interview session on: ${(topics || []).slice(0, 5).join(', ') || 'general topics'}
+Difficulty: ${difficulty || 'medium'}
+Total questions: ${questionCount || 5}
+
+Return JSON:
+"intro": A warm, natural intro (2-3 sentences). Mention the topics briefly and set expectations.
+  GOOD: "Hey! Welcome to your practice session. We'll cover some ${topics?.[0] || 'interesting'} topics today — about ${questionCount} questions, nothing too intense. Ready when you are!"
+  BAD: "Welcome to this automated assessment. You will be evaluated on the following criteria..."
+
+ONLY return the JSON.`,
+    };
+}
+
+export function buildWrapUpPrompt(scores, topics) {
+    const avgScore = scores.length > 0
+        ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10
+        : 0;
+    return {
+        system: `You are a friendly interviewer wrapping up a practice session. Be warm, brief, and constructive. 2-3 sentences.
+Respond with ONLY a JSON object.`,
+        user: `Session complete. Average score: ${avgScore}/10.
+Topics covered: ${(topics || []).join(', ')}
+Individual scores: ${scores.join(', ')}
+
+Return JSON:
+"wrapUp": A warm closing statement (2-3 sentences). Highlight what went well and one area to work on. Be encouraging.
+  GOOD: "That was a great session! You really nailed the data structures questions. If I were you, I'd spend a bit more time on recursion concepts — but overall, solid work!"
+  BAD: "The assessment has concluded. Your performance was rated at 7.2/10."
+
+ONLY return the JSON.`,
+    };
+}
+
