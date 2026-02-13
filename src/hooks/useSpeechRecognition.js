@@ -1,83 +1,53 @@
-"use client";
-
 import { useState, useCallback, useRef, useEffect } from "react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface UseSpeechRecognitionReturn {
-    transcript: string;
-    interimTranscript: string;
-    isListening: boolean;
-    isSupported: boolean;
-    start: () => void;
-    stop: () => void;
-    reset: () => void;
-    error: string | null;
-}
-
 /**
- * Custom hook wrapping the Web Speech API SpeechRecognition interface.
- * Works in Chrome and Edge. Falls back gracefully in unsupported browsers.
+ * Custom hook for Web Speech API speech recognition (voice input).
+ * Works in Chrome and Edge.
  */
-export function useSpeechRecognition(
-    options: {
-        continuous?: boolean;
-        interimResults?: boolean;
-        lang?: string;
-    } = {}
-): UseSpeechRecognitionReturn {
-    const {
-        continuous = true,
-        interimResults = true,
-        lang = "en-US",
-    } = options;
+export function useSpeechRecognition(options = {}) {
+    const { continuous = true, interimResults = true, lang = "en-US" } = options;
 
     const [transcript, setTranscript] = useState("");
     const [interimTranscript, setInterimTranscript] = useState("");
     const [isListening, setIsListening] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const recognitionRef = useRef<any>(null);
+    const [error, setError] = useState(null);
+    const recognitionRef = useRef(null);
 
     const isSupported =
         typeof window !== "undefined" &&
         ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
 
-    // Initialize recognition instance
     useEffect(() => {
         if (!isSupported) return;
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const w = window as any;
-        const SpeechRecognitionAPI = w.SpeechRecognition || w.webkitSpeechRecognition;
+        const SpeechRecognitionAPI =
+            window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = new SpeechRecognitionAPI();
 
         recognition.continuous = continuous;
         recognition.interimResults = interimResults;
         recognition.lang = lang;
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        recognition.onresult = (event: any) => {
-            let final = "";
+        recognition.onresult = (event) => {
+            let finalText = "";
             let interim = "";
 
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const result = event.results[i];
                 if (result.isFinal) {
-                    final += result[0].transcript;
+                    finalText += result[0].transcript;
                 } else {
                     interim += result[0].transcript;
                 }
             }
 
-            if (final) {
-                setTranscript((prev) => prev + final);
+            if (finalText) {
+                setTranscript((prev) => prev + finalText);
             }
             setInterimTranscript(interim);
         };
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        recognition.onerror = (event: any) => {
+        recognition.onerror = (event) => {
             if (event.error !== "aborted") {
                 setError(`Speech recognition error: ${event.error}`);
             }
@@ -91,9 +61,7 @@ export function useSpeechRecognition(
 
         recognitionRef.current = recognition;
 
-        return () => {
-            recognition.abort();
-        };
+        return () => recognition.abort();
     }, [isSupported, continuous, interimResults, lang]);
 
     const start = useCallback(() => {

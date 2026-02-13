@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { useInterview } from '../context/InterviewContext'
+import { analyzeContent, generateQuestions } from '../lib/gemini'
 
 const personas = [
     { id: 'academic', icon: 'school', color: 'blue', label: 'Academic Professor', desc: 'Strict, detail-oriented, focuses on theoretical knowledge and definitions.' },
@@ -9,11 +11,12 @@ const personas = [
 
 const questionTypes = [
     { id: 'mcq', icon: 'list_alt', label: 'Multiple Choice', desc: 'Quick knowledge checks', defaultOn: false },
-    { id: 'open', icon: 'psychology', label: 'Open-Ended Analysis', desc: 'Deep dive explanations', defaultOn: true },
+    { id: 'open-ended', icon: 'psychology', label: 'Open-Ended Analysis', desc: 'Deep dive explanations', defaultOn: true },
     { id: 'scenario', icon: 'extension', label: 'Scenario-based Problems', desc: 'Real-world application', defaultOn: true },
 ]
 
-const difficultyLabels = ['Easy', 'Medium', 'Hard']
+const difficultyLabels = ['easy', 'medium', 'hard']
+const difficultyDisplay = ['Easy', 'Medium', 'Hard']
 const difficultyInfo = [
     'Questions will be straightforward, focusing on basic recall and fundamental concepts.',
     'Questions will test core concepts with moderate depth, suitable for standard interview preparation.',
@@ -21,22 +24,111 @@ const difficultyInfo = [
 ]
 
 export default function Configuration() {
+    const { state, setSettings, setAnalysis, setQuestions, setLoading, setError } = useInterview()
+    const navigate = useNavigate()
+
     const [persona, setPersona] = useState('academic')
     const [difficulty, setDifficulty] = useState(1) // 0=Easy, 1=Medium, 2=Hard
-    const [toggles, setToggles] = useState({ mcq: false, open: true, scenario: true })
+    const [toggles, setToggles] = useState({ mcq: false, 'open-ended': true, scenario: true })
+    const [questionCount, setQuestionCount] = useState(5)
+    const [processing, setProcessing] = useState(false)
+    const [processingStep, setProcessingStep] = useState('')
+
+    const documentName = state.document?.metadata?.fileName || state.document?.metadata?.title || 'No document uploaded'
+    const hasDocument = !!state.document
+
+    const handleStartInterview = async () => {
+        if (!hasDocument) {
+            setError('Please upload a PDF first from the Dashboard.')
+            return
+        }
+
+        const selectedTypes = Object.entries(toggles)
+            .filter(([, v]) => v)
+            .map(([k]) => k)
+
+        if (selectedTypes.length === 0) {
+            setError('Please select at least one question type.')
+            return
+        }
+
+        const settings = {
+            persona,
+            difficulty: difficultyLabels[difficulty],
+            questionTypes: selectedTypes,
+            questionCount,
+        }
+        setSettings(settings)
+
+        setProcessing(true)
+        setLoading(true)
+
+        try {
+            // Step 1: Analyze content
+            setProcessingStep('Analyzing document content...')
+            const analysis = await analyzeContent(state.document.text)
+            setAnalysis(analysis)
+
+            // Step 2: Generate questions
+            setProcessingStep('Generating interview questions...')
+            const questions = await generateQuestions(state.document.text, {
+                difficulty: settings.difficulty,
+                count: questionCount,
+                types: selectedTypes,
+                persona: settings.persona,
+            })
+            setQuestions(Array.isArray(questions) ? questions : questions.questions || [])
+
+            setLoading(false)
+            setProcessing(false)
+            navigate('/session')
+        } catch (err) {
+            setError('AI processing failed: ' + err.message)
+            setProcessing(false)
+            setLoading(false)
+        }
+    }
 
     return (
         <div className="flex-1 p-6 lg:p-10 max-w-7xl mx-auto w-full">
             {/* Breadcrumb */}
             <div className="mb-8">
                 <div className="flex items-center gap-2 text-sm text-slate-500 mb-2">
-                    <span>Dashboard</span>
+                    <Link to="/" className="hover:text-primary">Dashboard</Link>
                     <span className="material-icons-round text-sm">chevron_right</span>
                     <span className="text-primary font-medium">New Session</span>
                 </div>
                 <h1 className="text-3xl font-bold text-slate-900">Configure Your Interview</h1>
                 <p className="text-slate-500 mt-2 max-w-2xl">Upload your PDF source material and customize the AI interviewer's persona to match your preparation goals.</p>
             </div>
+
+            {/* Error Banner */}
+            {state.error && (
+                <div className="mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl flex items-center gap-3">
+                    <span className="material-icons-round text-red-500">error</span>
+                    <span className="text-sm">{state.error}</span>
+                    <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600">
+                        <span className="material-icons-round text-sm">close</span>
+                    </button>
+                </div>
+            )}
+
+            {/* Processing Overlay */}
+            {processing && (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center">
+                    <div className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl text-center">
+                        <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <span className="material-icons-round text-primary text-3xl animate-spin">psychology</span>
+                        </div>
+                        <h3 className="text-xl font-bold text-slate-900 mb-2">AI is Preparing Your Interview</h3>
+                        <p className="text-slate-500 mb-4">{processingStep}</p>
+                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div className="bg-primary h-full rounded-full animate-pulse" style={{ width: processingStep.includes('Generating') ? '70%' : '35%' }}></div>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-4">This may take 10-30 seconds</p>
+                    </div>
+                </div>
+            )}
 
             {/* Form Card */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -57,8 +149,8 @@ export default function Configuration() {
                                     key={p.id}
                                     onClick={() => setPersona(p.id)}
                                     className={`relative flex flex-col items-center p-6 rounded-lg border-2 transition-all duration-200 h-full text-center group ${persona === p.id
-                                            ? 'border-primary bg-primary/5'
-                                            : 'border-slate-100 bg-slate-50 hover:border-primary/50 hover:bg-white'
+                                        ? 'border-primary bg-primary/5'
+                                        : 'border-slate-100 bg-slate-50 hover:border-primary/50 hover:bg-white'
                                         }`}
                                 >
                                     <div className={`w-16 h-16 rounded-full bg-${p.color}-100 text-${p.color}-600 mb-4 flex items-center justify-center group-hover:scale-110 transition-transform duration-300`}>
@@ -66,7 +158,6 @@ export default function Configuration() {
                                     </div>
                                     <h3 className="font-bold text-slate-900 mb-1">{p.label}</h3>
                                     <p className="text-xs text-slate-500">{p.desc}</p>
-                                    {/* Radio indicator */}
                                     <div className={`absolute top-4 right-4 w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${persona === p.id ? 'bg-primary border-primary' : 'border-slate-300 bg-white'
                                         }`}>
                                         {persona === p.id && <span className="material-icons-round text-white text-xs">check</span>}
@@ -94,7 +185,7 @@ export default function Configuration() {
                                         className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                                     />
                                     <div className="flex justify-between text-xs font-medium text-slate-500 mt-3 px-1">
-                                        {difficultyLabels.map((label, i) => (
+                                        {difficultyDisplay.map((label, i) => (
                                             <span key={label} className={`cursor-pointer transition-colors ${difficulty === i ? 'text-primary font-bold' : 'hover:text-primary'}`}>
                                                 {label}
                                             </span>
@@ -104,7 +195,7 @@ export default function Configuration() {
                                 <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex gap-3 items-start">
                                     <span className="material-icons-round text-blue-600 mt-0.5">info</span>
                                     <div>
-                                        <p className="text-sm text-blue-900 font-medium">{difficultyLabels[difficulty]} Difficulty</p>
+                                        <p className="text-sm text-blue-900 font-medium">{difficultyDisplay[difficulty]} Difficulty</p>
                                         <p className="text-xs text-blue-700 mt-0.5">{difficultyInfo[difficulty]}</p>
                                     </div>
                                 </div>
@@ -143,6 +234,19 @@ export default function Configuration() {
                                     </div>
                                 ))}
                             </div>
+
+                            {/* Question Count */}
+                            <div className="pl-8 mt-6">
+                                <label className="block text-sm font-semibold text-slate-700 mb-2">Number of Questions</label>
+                                <div className="flex items-center gap-4">
+                                    <input
+                                        type="range" min="3" max="15" step="1" value={questionCount}
+                                        onChange={(e) => setQuestionCount(Number(e.target.value))}
+                                        className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                    />
+                                    <span className="text-lg font-bold text-primary w-8 text-center">{questionCount}</span>
+                                </div>
+                            </div>
                         </section>
                     </div>
                 </div>
@@ -150,20 +254,30 @@ export default function Configuration() {
                 {/* Footer */}
                 <div className="bg-slate-50 px-6 py-5 border-t border-slate-200 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div className="text-sm text-slate-500 flex items-center gap-2">
-                        <span className="material-icons-round text-lg text-primary">description</span>
-                        <span>Currently analyzing: <span className="font-medium text-slate-900">Machine_Learning_Notes_Ch1.pdf</span></span>
+                        <span className={`material-icons-round text-lg ${hasDocument ? 'text-primary' : 'text-slate-400'}`}>description</span>
+                        <span>
+                            {hasDocument ? (
+                                <>Currently analyzing: <span className="font-medium text-slate-900">{documentName}</span></>
+                            ) : (
+                                <span className="text-amber-600 font-medium">No document uploaded — <Link to="/" className="text-primary underline">go back to upload</Link></span>
+                            )}
+                        </span>
                     </div>
                     <div className="flex items-center gap-3 w-full md:w-auto">
                         <Link to="/" className="w-full md:w-auto px-6 py-2.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 font-medium transition-colors text-center">
                             Cancel
                         </Link>
-                        <Link
-                            to="/session"
-                            className="w-full md:w-auto px-8 py-2.5 rounded-lg bg-primary hover:bg-primary-dark text-white shadow-lg shadow-primary/30 font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2"
+                        <button
+                            onClick={handleStartInterview}
+                            disabled={!hasDocument || processing}
+                            className={`w-full md:w-auto px-8 py-2.5 rounded-lg text-white shadow-lg font-semibold transition-all flex items-center justify-center gap-2 ${hasDocument && !processing
+                                    ? 'bg-primary hover:bg-primary-dark shadow-primary/30 hover:scale-[1.02] active:scale-[0.98]'
+                                    : 'bg-slate-300 cursor-not-allowed shadow-none'
+                                }`}
                         >
-                            <span>Start Interview</span>
+                            <span>{processing ? 'Processing...' : 'Start Interview'}</span>
                             <span className="material-icons-round text-sm">arrow_forward</span>
-                        </Link>
+                        </button>
                     </div>
                 </div>
             </div>
