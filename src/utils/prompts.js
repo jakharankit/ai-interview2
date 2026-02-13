@@ -233,6 +233,95 @@ Return JSON:
 - "topicBreakdown": [{ "topic": string, "score": 0-100, "questionsCount": number }]
 - "matchLevel": "Excellent Match" | "Good Match" | "Fair Match" | "Needs Improvement"
 
+
+ONLY return the JSON.`,
+    };
+}
+
+// ─── Coding Mode Prompts ─────────────────────────────────────────────────────
+
+export function buildModeDetectionPrompt(text) {
+    return {
+        system: `You classify content for interview modes. Respond with ONLY valid JSON.`,
+        user: `Scan this document. Does it have programming/coding content?
+
+Look for: code snippets, algorithms, "implement", "function", data structures, programming concepts.
+
+Return JSON:
+- "hasCoding": true/false
+- "codingTopics": array of coding topics found (e.g., ["sorting", "linked lists"])
+- "languages": detected programming languages (e.g., ["Python", "JavaScript"])
+- "hasVoice": true/false — has behavioral/soft-skill content good for voice?
+
+Document:
+"""
+${text.slice(0, 6000)}
+"""
+
+ONLY return the JSON.`,
+    };
+}
+
+export function buildCodingQuestionsPrompt(content, config) {
+    const { difficulty = "mixed", count = 3 } = config || {};
+
+    return {
+        system: `You generate practical coding questions with test cases. Keep it clear and simple.
+Respond with ONLY a valid JSON array.`,
+        user: `Generate ${count} coding questions from this content.
+
+RULES:
+- Ask the user to write a function to solve a problem
+- Include 3-5 test cases per question with input and expected output
+- Difficulty: ${difficulty}
+- Solvable in 10-20 lines of code
+- Use simple language
+
+Return JSON array. Each item:
+- "id": number
+- "type": "coding"
+- "mode": "coding"
+- "question": clear problem statement
+- "functionName": function name to implement (e.g., "reverseString")
+- "language": "javascript"
+- "starterCode": starter template (e.g., "function reverseString(s) {\\n  // your code here\\n}")
+- "testCases": [{ "input": "quoted args", "expected": "quoted result", "description": "what it tests" }]
+- "difficulty": "easy" | "medium" | "hard"
+- "topic": related topic
+- "points": 5/10/15
+- "hints": 2-3 hint strings
+
+Content:
+"""
+${content.slice(0, 6000)}
+"""
+
+ONLY return the JSON array.`,
+    };
+}
+
+export function buildCodeEvalPrompt(question, code, testResults, language) {
+    return {
+        system: `You're a supportive coding mentor. Be encouraging and specific. Talk like a real person.
+Respond with ONLY valid JSON.`,
+        user: `Review this code submission.
+
+Question: "${question}"
+Language: ${language}
+Code:
+\`\`\`
+${code}
+\`\`\`
+Test results: ${JSON.stringify(testResults)}
+
+Return JSON:
+"score": 0-10 (mostly based on test pass rate, but consider code quality)
+"feedback": 2-3 sentences, warm and specific
+"strengths": 2-3 items
+"improvements": 2-3 items
+"modelAnswer": clean, well-commented solution code as a string
+"complexity": { "time": "O(n)", "space": "O(1)" }
+
 ONLY return the JSON.`,
     };
 }

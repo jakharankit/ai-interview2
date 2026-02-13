@@ -4,6 +4,9 @@ import {
     buildQuestionsPrompt,
     buildEvaluatePrompt,
     buildReportPrompt,
+    buildModeDetectionPrompt,
+    buildCodingQuestionsPrompt,
+    buildCodeEvalPrompt,
     humanizeResponse,
 } from "../utils/prompts";
 
@@ -14,6 +17,12 @@ const MODELS = [
     "Qwen/Qwen2.5-Coder-32B-Instruct",
 ];
 
+// Code-specific chain (Qwen is better for code generation)
+const CODE_MODELS = [
+    "Qwen/Qwen2.5-Coder-32B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+];
+
 function getClient() {
     const key = import.meta.env.VITE_HF_TOKEN;
     if (!key) throw new Error("VITE_HF_TOKEN is not set in .env.local");
@@ -22,13 +31,12 @@ function getClient() {
 
 /**
  * Call HuggingFace model with retry + fallback chain.
- * Tries each model in order, retries up to 2 times per model.
  */
-async function callModel(systemPrompt, userPrompt) {
+async function callModel(systemPrompt, userPrompt, modelChain = MODELS) {
     const client = getClient();
     let lastError = null;
 
-    for (const model of MODELS) {
+    for (const model of modelChain) {
         for (let attempt = 0; attempt < 2; attempt++) {
             try {
                 const response = await Promise.race([
@@ -42,7 +50,6 @@ async function callModel(systemPrompt, userPrompt) {
                         temperature: 0.8,
                         top_p: 0.9,
                     }),
-                    // 30 second timeout
                     new Promise((_, reject) =>
                         setTimeout(() => reject(new Error("Request timed out")), 30000)
                     ),
@@ -51,23 +58,16 @@ async function callModel(systemPrompt, userPrompt) {
                 const text = response.choices?.[0]?.message?.content?.trim();
                 if (!text) throw new Error("Empty response");
 
-                // Extract JSON from response
                 const parsed = extractJSON(text);
                 return humanizeResponse(parsed);
             } catch (err) {
                 lastError = err;
-                console.warn(
-                    `Model ${model} attempt ${attempt + 1} failed:`,
-                    err.message
-                );
-
-                // Wait before retry (exponential backoff: 1s, 2s)
+                console.warn(`Model ${model} attempt ${attempt + 1} failed:`, err.message);
                 if (attempt < 1) {
                     await new Promise((r) => setTimeout(r, (attempt + 1) * 1000));
                 }
             }
         }
-        // Model exhausted retries, try next model
         console.warn(`Switching from ${model} to next fallback...`);
     }
 
@@ -77,24 +77,18 @@ async function callModel(systemPrompt, userPrompt) {
 }
 
 /**
- * Extract JSON from model response — handles fences, extra text, etc.
+ * Extract JSON from model response.
  */
 function extractJSON(text) {
-    // Try markdown fenced JSON
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (fenced) {
         try { return JSON.parse(fenced[1].trim()); } catch { }
     }
-
-    // Try direct parse
     try { return JSON.parse(text); } catch { }
-
-    // Try extracting array or object
     const jsonMatch = text.match(/(\[[\s\S]*\])/) || text.match(/(\{[\s\S]*\})/);
     if (jsonMatch) {
         try { return JSON.parse(jsonMatch[1]); } catch { }
     }
-
     throw new Error("Could not parse response as JSON");
 }
 
@@ -117,7 +111,6 @@ export async function evaluateAnswer(question, userAnswer, context) {
 
 export async function generateReport(sessionData) {
     const { questions, answers, evaluations, settings } = sessionData;
-
     const qaPairs = questions.map((q, i) => ({
         question: q.question,
         type: q.type,
@@ -126,7 +119,23 @@ export async function generateReport(sessionData) {
         userAnswer: answers[i] || "(skipped)",
         score: evaluations[i]?.score ?? 0,
     }));
-
     const { system, user } = buildReportPrompt(qaPairs, settings, questions.length);
     return callModel(system, user);
+}
+
+// ─── Coding Mode Functions ───────────────────────────────────────────────────
+
+export async function detectModes(text) {
+    const { system, user } = buildModeDetectionPrompt(text);
+    return callModel(system, user);
+}
+
+export async function generateCodingQuestions(content, config) {
+    const { system, user } = buildCodingQuestionsPrompt(content, config);
+    return callModel(system, user, CODE_MODELS);
+}
+
+export async function evaluateCode(question, code, testResults, language) {
+    const { system, user } = buildCodeEvalPrompt(question, code, testResults, language);
+    return callModel(system, user, CODE_MODELS);
 }

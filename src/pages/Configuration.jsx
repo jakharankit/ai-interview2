@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useInterview } from '../context/InterviewContext'
-import { analyzeContent, generateQuestions } from '../lib/gemini'
+import { analyzeContent, generateQuestions, detectModes, generateCodingQuestions } from '../lib/gemini'
 
 const personas = [
     { id: 'academic', icon: 'school', color: 'blue', label: 'Academic Professor', desc: 'Strict, detail-oriented, focuses on theoretical knowledge and definitions.' },
@@ -13,6 +13,7 @@ const questionTypes = [
     { id: 'mcq', icon: 'list_alt', label: 'Multiple Choice', desc: 'Quick knowledge checks', defaultOn: false },
     { id: 'open-ended', icon: 'psychology', label: 'Open-Ended Analysis', desc: 'Deep dive explanations', defaultOn: true },
     { id: 'scenario', icon: 'extension', label: 'Scenario-based Problems', desc: 'Real-world application', defaultOn: true },
+    { id: 'coding', icon: 'code', label: 'Coding Challenges', desc: 'Write and run code solutions', defaultOn: false },
 ]
 
 const difficultyLabels = ['easy', 'medium', 'hard']
@@ -24,12 +25,12 @@ const difficultyInfo = [
 ]
 
 export default function Configuration() {
-    const { state, setSettings, setAnalysis, setQuestions, setLoading, setError } = useInterview()
+    const { state, setSettings, setAnalysis, setQuestions, setLoading, setError, setModeFlags } = useInterview()
     const navigate = useNavigate()
 
     const [persona, setPersona] = useState('academic')
     const [difficulty, setDifficulty] = useState(1) // 0=Easy, 1=Medium, 2=Hard
-    const [toggles, setToggles] = useState({ mcq: false, 'open-ended': true, scenario: true })
+    const [toggles, setToggles] = useState({ mcq: false, 'open-ended': true, scenario: true, coding: false })
     const [questionCount, setQuestionCount] = useState(5)
     const [processing, setProcessing] = useState(false)
     const [processingStep, setProcessingStep] = useState('')
@@ -57,6 +58,7 @@ export default function Configuration() {
             difficulty: difficultyLabels[difficulty],
             questionTypes: selectedTypes,
             questionCount,
+            codingEnabled: selectedTypes.includes('coding'),
         }
         setSettings(settings)
 
@@ -69,15 +71,59 @@ export default function Configuration() {
             const analysis = await analyzeContent(state.document.text)
             setAnalysis(analysis)
 
+            // Step 1.5: Detect modes if coding enabled
+            let modeInfo = null
+            if (settings.codingEnabled) {
+                setProcessingStep('Detecting coding content...')
+                try {
+                    modeInfo = await detectModes(state.document.text)
+                    setModeFlags(modeInfo)
+                } catch (e) {
+                    console.warn('Mode detection failed, continuing:', e)
+                }
+            }
+
             // Step 2: Generate questions
             setProcessingStep('Generating interview questions...')
-            const questions = await generateQuestions(state.document.text, {
-                difficulty: settings.difficulty,
-                count: questionCount,
-                types: selectedTypes,
-                persona: settings.persona,
-            })
-            setQuestions(Array.isArray(questions) ? questions : questions.questions || [])
+            const nonCodingTypes = selectedTypes.filter(t => t !== 'coding')
+            const codingCount = settings.codingEnabled ? Math.max(1, Math.floor(questionCount * 0.4)) : 0
+            const regularCount = questionCount - codingCount
+
+            let allQuestions = []
+
+            // Generate regular questions
+            if (regularCount > 0 && nonCodingTypes.length > 0) {
+                const regular = await generateQuestions(state.document.text, {
+                    difficulty: settings.difficulty,
+                    count: regularCount,
+                    types: nonCodingTypes,
+                    persona: settings.persona,
+                })
+                const regularArr = Array.isArray(regular) ? regular : regular.questions || []
+                allQuestions = regularArr.map(q => ({ ...q, mode: q.mode || 'text' }))
+            }
+
+            // Generate coding questions
+            if (codingCount > 0) {
+                setProcessingStep('Generating coding challenges...')
+                try {
+                    const coding = await generateCodingQuestions(state.document.text, {
+                        difficulty: settings.difficulty,
+                        count: codingCount,
+                    })
+                    const codingArr = Array.isArray(coding) ? coding : coding.questions || []
+                    allQuestions = [...allQuestions, ...codingArr.map(q => ({ ...q, mode: 'coding' }))]
+                } catch (e) {
+                    console.warn('Coding question generation failed:', e)
+                }
+            }
+
+            // Shuffle to mix coding + non-coding
+            allQuestions.sort(() => Math.random() - 0.5)
+            // Re-assign IDs
+            allQuestions = allQuestions.map((q, i) => ({ ...q, id: i + 1 }))
+
+            setQuestions(allQuestions)
 
             setLoading(false)
             setProcessing(false)
@@ -271,8 +317,8 @@ export default function Configuration() {
                             onClick={handleStartInterview}
                             disabled={!hasDocument || processing}
                             className={`w-full md:w-auto px-8 py-2.5 rounded-lg text-white shadow-lg font-semibold transition-all flex items-center justify-center gap-2 ${hasDocument && !processing
-                                    ? 'bg-primary hover:bg-primary-dark shadow-primary/30 hover:scale-[1.02] active:scale-[0.98]'
-                                    : 'bg-slate-300 cursor-not-allowed shadow-none'
+                                ? 'bg-primary hover:bg-primary-dark shadow-primary/30 hover:scale-[1.02] active:scale-[0.98]'
+                                : 'bg-slate-300 cursor-not-allowed shadow-none'
                                 }`}
                         >
                             <span>{processing ? 'Processing...' : 'Start Interview'}</span>

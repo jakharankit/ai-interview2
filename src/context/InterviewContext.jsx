@@ -6,12 +6,16 @@ const initialState = {
     document: null, // { text, metadata, chunks }
     analysis: null, // { topics, themes, difficulty, keyTerms, summary }
 
+    // Mode detection flags
+    modeFlags: null, // { hasCoding, codingTopics, languages, hasVoice }
+
     // Settings
     settings: {
         persona: "academic",
         difficulty: "medium",
         questionTypes: ["open-ended", "scenario"],
         questionCount: 5,
+        codingEnabled: false,
     },
 
     // Interview session
@@ -20,11 +24,15 @@ const initialState = {
     answers: [],
     evaluations: [],
 
+    // Coding mode state
+    codeSubmissions: [], // user's code per question
+    testResults: [], // pass/fail results per question
+
     // Report
     report: null,
 
     // Status
-    status: "idle", // idle | uploading | analyzing | generating | interviewing | evaluating | reporting | complete | error
+    status: "idle",
     error: null,
     loading: false,
 };
@@ -48,8 +56,25 @@ function interviewReducer(state, action) {
                 currentIndex: 0,
                 answers: new Array(action.payload.length).fill(null),
                 evaluations: new Array(action.payload.length).fill(null),
+                codeSubmissions: new Array(action.payload.length).fill(null),
+                testResults: new Array(action.payload.length).fill(null),
                 status: "interviewing",
             };
+
+        case "SET_CODE": {
+            const newCode = [...state.codeSubmissions];
+            newCode[action.payload.index] = action.payload.code;
+            return { ...state, codeSubmissions: newCode };
+        }
+
+        case "SET_TEST_RESULTS": {
+            const newResults = [...state.testResults];
+            newResults[action.payload.index] = action.payload.results;
+            return { ...state, testResults: newResults };
+        }
+
+        case "SET_MODE_FLAGS":
+            return { ...state, modeFlags: action.payload };
 
         case "SUBMIT_ANSWER":
             const newAnswers = [...state.answers];
@@ -115,6 +140,12 @@ export function InterviewProvider({ children }) {
         setLoading: (loading) => dispatch({ type: "SET_LOADING", payload: loading }),
         setError: (error) => dispatch({ type: "SET_ERROR", payload: error }),
         reset: () => dispatch({ type: "RESET" }),
+        setCode: (index, code) =>
+            dispatch({ type: "SET_CODE", payload: { index, code } }),
+        setTestResults: (index, results) =>
+            dispatch({ type: "SET_TEST_RESULTS", payload: { index, results } }),
+        setModeFlags: (flags) =>
+            dispatch({ type: "SET_MODE_FLAGS", payload: flags }),
     };
 
     return (
