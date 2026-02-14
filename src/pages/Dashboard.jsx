@@ -1,17 +1,30 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useInterview } from '../context/InterviewContext'
+import { useAuth } from '../context/AuthContext'
 import { parsePDF } from '../lib/pdf-parser'
+import { getInterviews } from '../lib/firestore'
 
 export default function Dashboard() {
     const { state, setDocument, setError, setStatus } = useInterview()
+    const { user } = useAuth()
     const navigate = useNavigate()
     const fileInputRef = useRef(null)
     const [dragActive, setDragActive] = useState(false)
     const [uploading, setUploading] = useState(false)
 
-    // Load history from localStorage
-    const history = JSON.parse(localStorage.getItem('interviewHistory') || '[]')
+    // Load history from Firestore
+    const [history, setHistory] = useState([])
+    const [historyLoading, setHistoryLoading] = useState(true)
+
+    useEffect(() => {
+        if (!user?.uid) return
+        getInterviews(user.uid, 50)
+            .then(setHistory)
+            .catch(() => setHistory([]))
+            .finally(() => setHistoryLoading(false))
+    }, [user?.uid])
+
     const recentInterviews = history.slice(0, 3)
     const avgScore = history.length > 0
         ? Math.round(history.reduce((sum, h) => sum + (h.score || 0), 0) / history.length)
@@ -115,10 +128,10 @@ export default function Dashboard() {
                         onDragLeave={handleDragLeave}
                         onClick={() => fileInputRef.current?.click()}
                         className={`flex-1 border-2 border-dashed rounded-xl flex flex-col items-center justify-center py-8 transition-all cursor-pointer group ${dragActive
-                                ? 'border-primary bg-primary/5 scale-[1.01]'
-                                : uploading
-                                    ? 'border-amber-300 bg-amber-50'
-                                    : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                            ? 'border-primary bg-primary/5 scale-[1.01]'
+                            : uploading
+                                ? 'border-amber-300 bg-amber-50'
+                                : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
                             }`}
                     >
                         <input

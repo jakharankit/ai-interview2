@@ -1,22 +1,31 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
+import { getInterviews, deleteInterview, clearInterviews } from '../lib/firestore'
 
 export default function History() {
-    const [history, setHistory] = useState(() =>
-        JSON.parse(localStorage.getItem('interviewHistory') || '[]')
-    )
+    const { user } = useAuth()
+    const [history, setHistory] = useState([])
+    const [loading, setLoading] = useState(true)
 
-    const handleClear = () => {
+    useEffect(() => {
+        if (!user?.uid) return
+        getInterviews(user.uid)
+            .then(setHistory)
+            .catch(() => setHistory([]))
+            .finally(() => setLoading(false))
+    }, [user?.uid])
+
+    const handleClear = async () => {
         if (window.confirm('Are you sure you want to clear all interview history?')) {
-            localStorage.removeItem('interviewHistory')
+            await clearInterviews(user.uid)
             setHistory([])
         }
     }
 
-    const handleDelete = (id) => {
-        const updated = history.filter(h => h.id !== id)
-        localStorage.setItem('interviewHistory', JSON.stringify(updated))
-        setHistory(updated)
+    const handleDelete = async (id) => {
+        await deleteInterview(user.uid, id)
+        setHistory(prev => prev.filter(h => h.id !== id))
     }
 
     const totalInterviews = history.length
@@ -107,8 +116,8 @@ export default function History() {
                                         </td>
                                         <td className="px-6 py-4">
                                             <span className={`text-xs px-2 py-1 rounded-full font-medium capitalize ${item.difficulty === 'easy' ? 'bg-green-50 text-green-600' :
-                                                    item.difficulty === 'hard' ? 'bg-red-50 text-red-600' :
-                                                        'bg-amber-50 text-amber-600'
+                                                item.difficulty === 'hard' ? 'bg-red-50 text-red-600' :
+                                                    'bg-amber-50 text-amber-600'
                                                 }`}>{item.difficulty || 'medium'}</span>
                                         </td>
                                         <td className="px-6 py-4 text-sm text-slate-500">{item.questionCount || '—'}</td>

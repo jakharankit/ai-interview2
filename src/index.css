@@ -367,3 +367,63 @@ body {
 .animate-fade-in {
   animation: fade-in 0.4s ease-out forwards;
 }
+
+/* ─── Toggle Switch (Configuration Page) ─── */
+.toggle-checkbox {
+  right: 0;
+  border-color: #cbd5e1;
+  transition: right 0.3s ease, border-color 0.3s ease, background-color 0.3s ease;
+}
+
+.toggle-checkbox:checked {
+  right: 0;
+  border-color: var(--color-primary, #13ecc8);
+}
+
+.toggle-checkbox:checked+.toggle-label {
+  background-color: var(--color-primary, #13ecc8);
+}
+
+.toggle-label {
+  transition: background-color 0.3s ease;
+}
+
+/* ─── Circular Chart (Results Page) ─── */
+.circular-chart {
+  display: block;
+  margin: 0 auto;
+}
+
+.circle-bg {
+  fill: none;
+  stroke: #e2e8f0;
+  stroke-width: 2.5;
+}
+
+.circle {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  animation: progress-fill 1.5s ease-out forwards;
+}
+
+.percentage {
+  font-size: 8px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.percentage-label {
+  font-size: 2.5px;
+  fill: #94a3b8;
+  text-anchor: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+@keyframes progress-fill {
+  0% {
+    stroke-dasharray: 0, 100;
+  }
+}

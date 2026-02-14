@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { useAuth } from '../../context/AuthContext'
 
 const navItems = [
     { to: '/', icon: 'dashboard', label: 'Dashboard' },
@@ -8,6 +9,8 @@ const navItems = [
 ]
 
 export default function Sidebar() {
+    const { user, logout } = useAuth()
+
     return (
         <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col flex-shrink-0 h-screen sticky top-0">
             {/* Logo */}
@@ -57,14 +60,18 @@ export default function Sidebar() {
                 {/* User */}
                 <div className="flex items-center gap-3 px-4 py-2 border-t border-slate-100 pt-4">
                     <div className="h-9 w-9 rounded-full bg-primary flex items-center justify-center text-white font-bold text-sm">
-                        AJ
+                        {user?.avatar || 'U'}
                     </div>
-                    <div className="flex flex-col">
-                        <span className="text-sm font-semibold text-slate-700">Ankit Jakhar</span>
-                        <span className="text-xs text-slate-500">Free Plan</span>
+                    <div className="flex flex-col flex-1 min-w-0">
+                        <span className="text-sm font-semibold text-slate-700 truncate">{user?.name || 'User'}</span>
+                        <span className="text-xs text-slate-500 capitalize">{user?.plan || 'Free'} Plan</span>
                     </div>
+                    <button onClick={logout} className="text-slate-400 hover:text-red-500 transition-colors" title="Logout">
+                        <span className="material-icons-round text-lg">logout</span>
+                    </button>
                 </div>
             </div>
         </aside>
     )
 }
+
